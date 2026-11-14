@@ -61,14 +61,39 @@ const dom = {
   finalCorrect: document.getElementById('final-correct'),
   finalWrong: document.getElementById('final-wrong'),
   finalSkipped: document.getElementById('final-skipped'),
-  btnRestart: document.getElementById('btn-restart')
+  btnRestart: document.getElementById('btn-restart'),
+
+  tabSwipes: document.getElementById('tab-swipes'),
+  tabMistakes: document.getElementById('tab-mistakes'),
+  tabProfile: document.getElementById('tab-profile'),
+  tabButtons: document.querySelectorAll('.tab-btn'),
+  mistakesBadge: document.getElementById('mistakes-badge'),
+  mistakesList: document.getElementById('mistakes-list'),
+  profileName: document.getElementById('profile-name'),
+  profTotal: document.getElementById('prof-total'),
+  profWinrate: document.getElementById('prof-winrate'),
+  btnResetProgress: document.getElementById('btn-reset-progress')
 };
 
 // --- 3. СОСТОЯНИЕ ПРИЛОЖЕНИЯ ---
 const SWIPE_THRESHOLD = 95; // Дистанция в пикселях для засчитывания свайпа
 const TAP_THRESHOLD = 8;    // Максимальное смещение пальца для распознавания тапа
 
+// Ключ, под которым данные будут лежать в памяти браузера/телефона
+const STORAGE_KEY = 'ege_tinder_stats_v1';
+
+// Пытаемся достать старую статистику. Если её нет — создаём пустую
+const savedStats = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
+  totalSwipes: 0,
+  correctAnswers: 0,
+  wrongAnswers: 0,
+  mistakesArray: [] // Сюда будут записываться ID карточек с ошибками
+};
+
 let state = {
+  currentTab: 'swipes', // Какая вкладка открыта сейчас
+  storage: savedStats,  // Ссылка на нашу долгосрочную статистику
+
   cards: [...CARDS_DATA],
   currentIndex: 0,
   correctCount: 0,
@@ -78,13 +103,18 @@ let state = {
   isExplanationMode: false,
   isAnimating: false,
 
-  // Переменные трекинга жеста
   isDragging: false,
   startX: 0,
   startY: 0,
   currentX: 0,
   crossedThreshold: false
 };
+
+// Функция сохранения статистики в память телефона и обновления счётчика ошибок
+function saveStatsToStorage() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.storage));
+  updateMistakesBadge();
+}
 
 // --- 4. ОТРИСОВКА КАРТОЧКИ И ИНТЕРФЕЙСА ---
 function renderCurrentCard() {
@@ -97,27 +127,34 @@ function renderCurrentCard() {
   state.isExplanationMode = false;
   state.isAnimating = false;
 
-  // Сброс стилей и классов карточки
   dom.card.style.transition = 'none';
   dom.card.style.transform = 'translate3d(0, 0, 0) rotate(0deg)';
   dom.card.style.opacity = '1';
   dom.card.className = 'card';
 
-  // Переключение видимости слоёв внутри карточки
   dom.cardFront.classList.remove('hidden');
   dom.cardExplanation.classList.add('hidden');
   dom.footerControls.style.visibility = 'visible';
 
-  // Форматируем слово с красивым выделением пропуска (заменяем ".." на стилизованный span)
-  const formattedWord = cardData.word.replace('..', '<span class="missing-dots">..</span>');
-  dom.cardTopic.textContent = cardData.topic;
+  // Собираем заголовок из новых полей taskId и theme
+  dom.cardTopic.textContent = `${cardData.taskId} • ${cardData.theme}`;
+
+  // Берём текст из поля content (если там есть "..", красиво подсвечиваем пропуск)
+  const formattedWord = cardData.content.replace('..', '<span class="missing-dots">..</span>');
   dom.cardWord.innerHTML = formattedWord;
 
-  // Обновляем боковые индикаторы и нижние кнопки
-  dom.badgeLeft.textContent = cardData.leftOption;
-  dom.badgeRight.textContent = cardData.rightOption;
-  dom.btnTextLeft.textContent = cardData.leftOption;
-  dom.btnTextRight.textContent = cardData.rightOption;
+  // Определяем подписи по бокам: для 'binary' — "Неверно"/"Верно", для 'choice' — буквы
+  const leftLabel = cardData.type === 'binary' ? 'Неверно' : cardData.options.left;
+  const rightLabel = cardData.type === 'binary' ? 'Верно' : cardData.options.right;
+
+  dom.badgeLeft.textContent = leftLabel;
+  dom.badgeRight.textContent = rightLabel;
+  dom.btnTextLeft.textContent = leftLabel;
+  dom.btnTextRight.textContent = rightLabel;
+
+  // Для длинных слов "Верно"/"Неверно" включаем широкий стиль боковых кнопок
+  dom.badgeLeft.classList.toggle('binary-mode', cardData.type === 'binary');
+  dom.badgeRight.classList.toggle('binary-mode', cardData.type === 'binary');
 
   resetBadges();
   updateHeaderStats();
@@ -227,12 +264,26 @@ function processChoice(direction) {
   if (state.isAnimating || state.isExplanationMode) return;
 
   const cardData = state.cards[state.currentIndex];
-  const chosenLetter = direction === 'left' ? cardData.leftOption : cardData.rightOption;
-  const isCorrect = chosenLetter === cardData.correctOption;
+
+  // Прибавляем +1 к общему числу решённых карточек в профиле
+  state.storage.totalSwipes++;
+
+  // Проверяем ответ: direction ('left' или 'right') сравниваем с correctAnswer
+  // Для 'binary' свайп вправо ('right') = Верно
+  // Для 'choice' свайп влево ('left') = левый вариант, вправо ('right') = правый
+  const isCorrect = direction === cardData.correctAnswer;
 
   if (isCorrect) {
+    state.storage.correctAnswers++;
+    saveStatsToStorage();
     handleCorrectAnswer(direction);
   } else {
+    state.storage.wrongAnswers++;
+    // Если такой ошибки ещё нет в списке — добавляем её ID в mistakesArray
+    if (!state.storage.mistakesArray.includes(cardData.id)) {
+      state.storage.mistakesArray.push(cardData.id);
+    }
+    saveStatsToStorage();
     handleWrongAnswer();
   }
 }
@@ -322,14 +373,20 @@ function showExplanationOverlay(mode) {
     dom.explanationStatus.className = 'status-pill info';
   }
 
-  // Подсвечиваем заглавную (вставленную) букву в ответе
-  const highlightedWord = cardData.fullWord.replace(
+  // 1. Безопасно берём fullWord, а если его нет (например, в карточке типа binary) — берём content
+  // (В Python это аналогично: cardData.get('fullWord') or cardData['content'])
+  const textToShow = cardData.fullWord || cardData.content;
+
+  // 2. Подсвечиваем заглавную букву зелёным цветом
+  const highlightedWord = textToShow.replace(
     /([А-ЯЁ])/g,
     '<span class="highlight-letter">$1</span>'
   );
 
   dom.explanationWord.innerHTML = highlightedWord;
-  dom.explanationRule.textContent = cardData.rule;
+
+  // 3. Подставляем текст правила из нового ключа explanation (вместо старого rule)
+  dom.explanationRule.textContent = cardData.explanation;
 }
 
 /**
@@ -391,6 +448,124 @@ dom.btnSwipeLeft.addEventListener('click', () => processChoice('left'));
 dom.btnSwipeRight.addEventListener('click', () => processChoice('right'));
 dom.btnIdk.addEventListener('click', handleDontKnow);
 dom.btnRestart.addEventListener('click', restartGame);
+
+// --- 9. РОУТИНГ И НИЖНЯЯ НАВИГАЦИЯ (TabBar) ---
+function switchTab(tabName) {
+  state.currentTab = tabName;
+  haptic.selection();
+
+  // Подсвечиваем активную кнопку внизу
+  dom.tabButtons.forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabName);
+  });
+
+  // Показываем нужный экран, остальные прячем
+  dom.tabSwipes.classList.toggle('hidden', tabName !== 'swipes');
+  dom.tabMistakes.classList.toggle('hidden', tabName !== 'mistakes');
+  dom.tabProfile.classList.toggle('hidden', tabName !== 'profile');
+
+  // При открытии вкладки обновляем данные на ней
+  if (tabName === 'mistakes') renderMistakesScreen();
+  if (tabName === 'profile') renderProfileScreen();
+}
+
+// Обновляем красный кружок с цифрой на вкладке "Ошибки"
+function updateMistakesBadge() {
+  const count = state.storage.mistakesArray.length;
+  dom.mistakesBadge.textContent = count;
+  dom.mistakesBadge.classList.toggle('hidden', count === 0);
+}
+
+// --- 10. ЭКРАН «ОШИБКИ» (MistakesScreen) ---
+function renderMistakesScreen() {
+  dom.mistakesList.innerHTML = '';
+
+  // Фильтруем общую базу: оставляем только те карточки, чьи ID есть в mistakesArray
+  const mistakeCards = CARDS_DATA.filter(card =>
+    state.storage.mistakesArray.includes(card.id)
+  );
+
+  // Если ошибок нет — показываем заглушку
+  if (mistakeCards.length === 0) {
+    dom.mistakesList.innerHTML = `
+      <div class="empty-state">
+        🎉 У тебя нет неотработанных ошибок!<br>Продолжай решать карточки.
+      </div>
+    `;
+    return;
+  }
+
+  // Рисуем каждую карточку с ошибкой
+  mistakeCards.forEach(card => {
+    const item = document.createElement('div');
+    item.className = 'mistake-item';
+    item.innerHTML = `
+      <div class="mistake-header">
+        <div>
+          <div class="mistake-word">${card.fullWord || card.content}</div>
+          <div class="mistake-theme">${card.taskId} • ${card.theme}</div>
+        </div>
+        <button class="btn-learned" type="button">Я выучил ✓</button>
+      </div>
+      <div class="mistake-explanation hidden">${card.explanation}</div>
+    `;
+
+    // Клик по самой карточке открывает или прячет объяснение правила
+    item.addEventListener('click', () => {
+      haptic.selection();
+      const expBox = item.querySelector('.mistake-explanation');
+      expBox.classList.toggle('hidden');
+    });
+
+    // Клик по кнопке "Я выучил" удаляет ID из массива ошибок и перерисовывает список
+    const learnedBtn = item.querySelector('.btn-learned');
+    learnedBtn.addEventListener('click', (e) => {
+      e.stopPropagation(); // Не даём клику сработать на родительскую карточку
+      haptic.notify('success');
+      state.storage.mistakesArray = state.storage.mistakesArray.filter(id => id !== card.id);
+      saveStatsToStorage();
+      renderMistakesScreen();
+    });
+
+    dom.mistakesList.appendChild(item);
+  });
+}
+
+// --- 11. ЭКРАН «ПРОФИЛЬ» (Profile) ---
+function renderProfileScreen() {
+  // Если открыто в Telegram — подставляем реальное имя пользователя
+  const tgUser = tg?.initDataUnsafe?.user;
+  if (tgUser?.first_name) {
+    dom.profileName.textContent = tgUser.first_name;
+  }
+
+  const { totalSwipes, correctAnswers } = state.storage;
+  const winrate = totalSwipes > 0 ? Math.round((correctAnswers / totalSwipes) * 100) : 0;
+
+  dom.profTotal.textContent = totalSwipes;
+  dom.profWinrate.textContent = `${winrate}%`;
+}
+
+// Кнопка "Сбросить прогресс" в Профиле
+dom.btnResetProgress.addEventListener('click', () => {
+  haptic.notify('warning');
+  state.storage = {
+    totalSwipes: 0,
+    correctAnswers: 0,
+    wrongAnswers: 0,
+    mistakesArray: []
+  };
+  saveStatsToStorage();
+  renderProfileScreen();
+});
+
+// Вешаем клики на все 3 кнопки нижней навигации
+dom.tabButtons.forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+// Обновляем бейдж ошибок сразу при запуске приложения
+updateMistakesBadge();
 
 // Старт приложения
 renderCurrentCard();
