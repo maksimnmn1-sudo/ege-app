@@ -3,151 +3,143 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ЕГЭ Русский язык — Свайп-тренажёр</title>
+    <title>ЕГЭ Тиндер — Свайп-тренажёр</title>
     <!-- Подключение официального SDK Telegram WebApp -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div class="app-container">
-    <div id="tab-swipes" class="tab-view active">
-        <!-- Сюда помещаются твои существующие header, play-area, finish-screen и footer-controls -->
-        <!-- ЭКРАН 1: ЗАДАНИЯ (СВАЙПЫ) -->
-        <header class="header">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progress-fill"></div>
+    <!-- 1. Стартовый экран выбора предмета -->
+    <div id="start-screen" class="start-screen">
+        <div class="start-content">
+            <h1>ЕГЭ Тиндер</h1>
+            <p>Выбери предмет для тренировки:</p>
+            <div class="subject-buttons">
+                <button class="subject-btn" data-subject="russian">Русский язык</button>
+                <button class="subject-btn" data-subject="social">Обществознание</button>
+                <button class="subject-btn" data-subject="math_profile">Математика (Профиль)</button>
+                <button class="subject-btn" data-subject="math_basic">Математика (База)</button>
             </div>
-            <div class="stats">
-                <span class="stat-item">Карточка: <b id="counter-current">1</b>/<span id="counter-total">0</span></span>
-                <span class="stat-item stat-correct">Верно: <b id="score-correct">0</b></span>
-                <span class="stat-item stat-wrong">Ошибки: <b id="score-wrong">0</b></span>
-            </div>
-        </header>
-
-        <!-- Игровая зона -->
-        <main class="play-area">
-            <!-- Боковые индикаторы выбора букв -->
-            <div class="choice-badge choice-left" id="badge-left">А</div>
-            <div class="choice-badge choice-right" id="badge-right">О</div>
-
-            <!-- Стек карточек -->
-            <div class="card-stack">
-                <!-- Фоновая декоративная карточка для эффекта глубины -->
-                <div class="card-Back"></div>
-
-                <!-- Основная интерактивная карточка -->
-                <div class="card" id="active-card">
-
-                    <!-- Лицевая сторона (вопрос) -->
-                    <div class="card-face card-front" id="card-front">
-                        <span class="topic-tag" id="card-topic">Орфография • Задание 9</span>
-                        <h1 class="word-title" id="card-word">заг..рать</h1>
-                        <p class="tap-hint">👆 Тапни по карточке, если не знаешь ответ</p>
-                    </div>
-
-                    <!-- Оверлей разбора (показывается при ошибке или нажатии "Не знаю") -->
-                    <div class="card-explanation hidden" id="card-explanation">
-                        <div class="status-pill" id="explanation-status">Ошибка</div>
-                        <h2 class="full-word" id="explanation-word">загОрать</h2>
-                        <div class="rule-box">
-                            <p id="explanation-rule">Текст правила...</p>
-                        </div>
-                        <button class="btn-primary" id="btn-next" type="button">Понятно →</button>
-                    </div>
-
-                </div>
-            </div>
-        </main>
-
-        <!-- Экран завершения тренировки -->
-        <section class="finish-screen hidden" id="finish-screen">
-            <div class="finish-card">
-                <h2>Тренировка завершена! 🎉</h2>
-                <p class="finish-subtitle">Все карточки пройдены. Вот твой результат:</p>
-                <div class="finish-stats-grid">
-                    <div class="finish-stat-box correct">
-                        <span class="stat-value" id="final-correct">0</span>
-                        <span class="stat-label">Верно</span>
-                    </div>
-                    <div class="finish-stat-box wrong">
-                        <span class="stat-value" id="final-wrong">0</span>
-                        <span class="stat-label">Ошибок</span>
-                    </div>
-                    <div class="finish-stat-box skipped">
-                        <span class="stat-value" id="final-skipped">0</span>
-                        <span class="stat-label">Подсмотрено</span>
-                    </div>
-                </div>
-                <button class="btn-primary" id="btn-restart" type="button">Пройти ещё раз</button>
-            </div>
-        </section>
-
-        <!-- Нижняя панель быстрых кнопок (дублирует свайпы для удобства) -->
-        <footer class="footer-controls" id="footer-controls">
-            <button class="control-btn btn-left" id="btn-swipe-left" type="button">
-                ← <span id="btn-text-left">А</span>
-            </button>
-            <button class="control-btn btn-idk" id="btn-idk" type="button">
-                Не знаю
-            </button>
-            <button class="control-btn btn-right" id="btn-swipe-right" type="button">
-                <span id="btn-text-right">О</span> →
-            </button>
-        </footer>
-    </div>
-    <!-- ЭКРАН 2: ОШИБКИ (МЭТЧИ) -->
-    <div id="tab-mistakes" class="tab-view hidden">
-        <h2 class="screen-title">Мои ошибки 🧠</h2>
-        <p class="screen-subtitle">Нажми на карточку, чтобы увидеть правило</p>
-        <!-- Контейнер, куда JS будет рендерить список ошибок -->
-        <div id="mistakes-list" class="mistakes-list"></div>
-    </div>
-
-    <!-- ЭКРАН 3: ПРОФИЛЬ -->
-    <div id="tab-profile" class="tab-view hidden">
-        <div class="profile-card">
-            <div class="profile-avatar">🎓</div>
-            <h2 id="profile-name" class="profile-name">Ученик ЕГЭ</h2>
-            <p class="profile-status">Готовлюсь на 90+ баллов</p>
-
-            <div class="profile-stats-grid">
-                <div class="profile-stat-box">
-                    <span class="stat-value" id="prof-total">0</span>
-                    <span class="stat-label">Решено карточек</span>
-                </div>
-                <div class="profile-stat-box">
-                    <span class="stat-value" id="prof-winrate">0%</span>
-                    <span class="stat-label">Винрейт (Точность)</span>
-                </div>
-            </div>
-
-            <button id="btn-reset-progress" class="btn-danger" type="button">
-                🗑 Сбросить прогресс
-            </button>
         </div>
     </div>
 
-    <!-- НИЖНЯЯ НАВИГАЦИЯ (TabBar) -->
-    <nav class="tab-bar">
-        <button class="tab-btn active" data-tab="swipes" type="button">
-            <span class="tab-icon">🔥</span>
-            <span class="tab-label">Задания</span>
-        </button>
-        <button class="tab-btn" data-tab="mistakes" type="button">
-            <span class="tab-icon">💔</span>
-            <span class="tab-label">Ошибки <b id="mistakes-badge" class="tab-badge hidden">0</b></span>
-        </button>
-        <button class="tab-btn" data-tab="profile" type="button">
-            <span class="tab-icon">👤</span>
-            <span class="tab-label">Профиль</span>
-        </button>
-    </nav>
-</div> <!-- Конец .app-container -->
-</div>
+    <!-- 2. Основной интерфейс приложения -->
+    <div class="app-container">
+        <div id="tab-swipes" class="tab-view active">
 
+            <!-- ЭКРАН 1: ЗАДАНИЯ (СВАЙПЫ) -->
+            <header class="header">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="stats">
+                    <span class="stat-item">Карточка: <b id="counter-current">1</b>/<span id="counter-total">0</span></span>
+                    <span class="stat-item stat-correct">Верно: <b id="score-correct">0</b></span>
+                    <span class="stat-item stat-wrong">Ошибки: <b id="score-wrong">0</b></span>
+                </div>
+            </header>
 
-<!-- Подключение данных и логики (type="module" позволяет использовать import/export) -->
-<script type="module" src="app.js"></script>
+            <!-- Игровая зона -->
+            <main class="play-area">
+                <!-- Боковые индикаторы выбора букв/вариантов -->
+                <div class="choice-badge choice-left" id="badge-left">А</div>
+                <div class="choice-badge choice-right" id="badge-right">О</div>
+
+                <!-- КОНТЕЙНЕР ДЛЯ КАРТОЧЕК (Сюда JS будет рендерить по 5 штук) -->
+                <div id="tinder-cards-container" class="card-stack">
+                    <!-- JS динамически добавит карточки сюда -->
+                </div>
+            </main>
+
+            <!-- Экран завершения тренировки -->
+            <section class="finish-screen hidden" id="finish-screen">
+                <div class="finish-card">
+                    <h2>Тренировка завершена! 🎉</h2>
+                    <p class="finish-subtitle">Все карточки пройдены. Вот твой результат:</p>
+                    <div class="finish-stats-grid">
+                        <div class="finish-stat-box correct">
+                            <span class="stat-value" id="final-correct">0</span>
+                            <span class="stat-label">Верно</span>
+                        </div>
+                        <div class="finish-stat-box wrong">
+                            <span class="stat-value" id="final-wrong">0</span>
+                            <span class="stat-label">Ошибок</span>
+                        </div>
+                        <div class="finish-stat-box skipped">
+                            <span class="stat-value" id="final-skipped">0</span>
+                            <span class="stat-label">Подсмотрено</span>
+                        </div>
+                    </div>
+                    <button class="btn-primary" id="btn-restart" type="button">Пройти ещё раз</button>
+                </div>
+            </section>
+
+            <!-- Нижняя панель быстрых кнопок (дублирует свайпы для удобства) -->
+            <footer class="footer-controls" id="footer-controls">
+                <button class="control-btn btn-left" id="btn-swipe-left" type="button">
+                    ← <span id="btn-text-left">А</span>
+                </button>
+                <button class="control-btn btn-idk" id="btn-idk" type="button">
+                    Не знаю
+                </button>
+                <button class="control-btn btn-right" id="btn-swipe-right" type="button">
+                    <span id="btn-text-right">О</span> →
+                </button>
+            </footer>
+        </div>
+
+        <!-- ЭКРАН 2: ОШИБКИ (МЭТЧИ) -->
+        <div id="tab-mistakes" class="tab-view hidden">
+            <h2 class="screen-title">Мои ошибки 🧠</h2>
+            <p class="screen-subtitle">Нажми на карточку, чтобы увидеть правило</p>
+            <!-- Контейнер, куда JS будет рендерить список ошибок -->
+            <div id="mistakes-list" class="mistakes-list"></div>
+        </div>
+
+        <!-- ЭКРАН 3: ПРОФИЛЬ -->
+        <div id="tab-profile" class="tab-view hidden">
+            <div class="profile-card">
+                <div class="profile-avatar">🎓</div>
+                <h2 id="profile-name" class="profile-name">Ученик ЕГЭ</h2>
+                <p class="profile-status">Готовлюсь на 90+ баллов</p>
+
+                <div class="profile-stats-grid">
+                    <div class="profile-stat-box">
+                        <span class="stat-value" id="prof-total">0</span>
+                        <span class="stat-label">Решено карточек</span>
+                    </div>
+                    <div class="profile-stat-box">
+                        <span class="stat-value" id="prof-winrate">0%</span>
+                        <span class="stat-label">Винрейт (Точность)</span>
+                    </div>
+                </div>
+
+                <button id="btn-reset-progress" class="btn-danger" type="button">
+                    🗑 Сбросить прогресс
+                </button>
+            </div>
+        </div>
+
+        <!-- НИЖНЯЯ НАВИГАЦИЯ (TabBar) -->
+        <nav class="tab-bar">
+            <button class="tab-btn active" data-tab="swipes" type="button">
+                <span class="tab-icon">🔥</span>
+                <span class="tab-label">Задания</span>
+            </button>
+            <button class="tab-btn" data-tab="mistakes" type="button">
+                <span class="tab-icon">💔</span>
+                <span class="tab-label">Ошибки <b id="mistakes-badge" class="tab-badge hidden">0</b></span>
+            </button>
+            <button class="tab-btn" data-tab="profile" type="button">
+                <span class="tab-icon">👤</span>
+                <span class="tab-label">Профиль</span>
+            </button>
+        </nav>
+    </div> <!-- Конец .app-container -->
+
+    <!-- 3. Подключение логики -->
+    <!-- Атрибут type="module" позволяет использовать import/export в app.js -->
+    <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-import { CARDS_DATA } from './data.js';
+import { loadSubjectDatabase } from './data.js';
 
 // --- 1. ИНИЦИАЛИЗАЦИЯ TELEGRAM WEB APP ---
 const tg = window.Telegram?.WebApp;
@@ -13,7 +13,7 @@ if (tg) {
 }
 
 /**
- * Обёртка над Telegram HapticFeedback с безопасным фоллбэком для обычного браузера
+ * Обёртка над Telegram HapticFeedback с безопасным фоллбэком
  */
 const haptic = {
   selection() {
@@ -29,6 +29,11 @@ const haptic = {
 
 // --- 2. ЭЛЕМЕНТЫ DOM ---
 const dom = {
+  // Элементы стартового экрана
+  startScreen: document.getElementById('start-screen'),
+  subjectButtons: document.querySelectorAll('.subject-btn'),
+
+  // Элементы карточки
   card: document.getElementById('active-card'),
   cardFront: document.getElementById('card-front'),
   cardExplanation: document.getElementById('card-explanation'),
@@ -76,25 +81,26 @@ const dom = {
 };
 
 // --- 3. СОСТОЯНИЕ ПРИЛОЖЕНИЯ ---
-const SWIPE_THRESHOLD = 95; // Дистанция в пикселях для засчитывания свайпа
-const TAP_THRESHOLD = 8;    // Максимальное смещение пальца для распознавания тапа
-
-// Ключ, под которым данные будут лежать в памяти браузера/телефона
+const SWIPE_THRESHOLD = 95;
+const TAP_THRESHOLD = 8;
+const BATCH_SIZE = 5; // Размер порции карточек
 const STORAGE_KEY = 'ege_tinder_stats_v1';
 
-// Пытаемся достать старую статистику. Если её нет — создаём пустую
 const savedStats = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
   totalSwipes: 0,
   correctAnswers: 0,
   wrongAnswers: 0,
-  mistakesArray: [] // Сюда будут записываться ID карточек с ошибками
+  mistakesArray: []
 };
 
 let state = {
-  currentTab: 'swipes', // Какая вкладка открыта сейчас
-  storage: savedStats,  // Ссылка на нашу долгосрочную статистику
+  currentTab: 'swipes',
+  storage: savedStats,
 
-  cards: [...CARDS_DATA],
+  currentSubjectData: [], // Полная база текущего предмета
+  seenCardIds: new Set(), // ID пройденных карточек в рамках круга
+  cards: [],              // Текущий батч (до 5 карточек)
+
   currentIndex: 0,
   correctCount: 0,
   wrongCount: 0,
@@ -102,7 +108,6 @@ let state = {
 
   isExplanationMode: false,
   isAnimating: false,
-
   isDragging: false,
   startX: 0,
   startY: 0,
@@ -110,16 +115,97 @@ let state = {
   crossedThreshold: false
 };
 
-// Функция сохранения статистики в память телефона и обновления счётчика ошибок
 function saveStatsToStorage() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.storage));
   updateMistakesBadge();
 }
 
+// Утилита: Алгоритм Фишера-Йетса для идеального рандома
+function shuffleArray(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+}
+
+// --- 3.1 РОУТИНГ ПРЕДМЕТОВ (НОВОЕ ИЗ ШАГА 5) ---
+dom.subjectButtons.forEach(btn => {
+  btn.addEventListener('click', async (e) => {
+    const subjectKey = e.currentTarget.getAttribute('data-subject');
+    await startSession(subjectKey);
+  });
+});
+
+async function startSession(subjectKey) {
+  // Подгружаем базу данных динамически
+  const rawData = await loadSubjectDatabase(subjectKey);
+  if (!rawData || rawData.length === 0) return;
+
+  // Копируем и перемешиваем колоду
+  state.currentSubjectData = JSON.parse(JSON.stringify(rawData));
+  shuffleArray(state.currentSubjectData);
+  state.seenCardIds.clear(); // Сбрасываем прогресс круга
+
+  // Сбрасываем локальную статистику сессии (не глобальную)
+  state.correctCount = 0;
+  state.wrongCount = 0;
+  state.skippedCount = 0;
+
+  // Скрываем меню, показываем интерфейс
+  dom.startScreen.classList.add('hidden');
+
+  if (tg?.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(goBackToMenu);
+  }
+
+  // Загружаем первые 5 карточек
+  loadNextBatch();
+}
+
+function goBackToMenu() {
+  dom.startScreen.classList.remove('hidden');
+  if (tg?.BackButton) {
+    tg.BackButton.hide();
+    tg.BackButton.offClick(goBackToMenu); // отписываемся от события
+  }
+}
+
+// --- 3.2 ЛОГИКА БАТЧЕЙ (ПОРЦИЙ ПО 5 ШТУК) ---
+function loadNextBatch() {
+  // Ищем карточки, которые в этом круге еще не показывались
+  let unseen = state.currentSubjectData.filter(c => !state.seenCardIds.has(c.id));
+
+  // Если не пройденных не осталось — круг завершён, зацикливаем!
+  if (unseen.length === 0) {
+    state.seenCardIds.clear();
+    shuffleArray(state.currentSubjectData);
+    unseen = [...state.currentSubjectData];
+
+    haptic.notify('success');
+    if (tg?.showAlert) {
+      tg.showAlert('Все задания пройдены! Начинаем новый круг с перемешанной колодой.');
+    }
+  }
+
+  // Берем до 5 карточек
+  const batch = unseen.slice(0, BATCH_SIZE);
+
+  // Запоминаем, что мы их выдали
+  batch.forEach(c => state.seenCardIds.add(c.id));
+
+  // Устанавливаем текущий батч в качестве активной колоды
+  state.cards = batch;
+  state.currentIndex = 0;
+
+  renderCurrentCard();
+}
+
 // --- 4. ОТРИСОВКА КАРТОЧКИ И ИНТЕРФЕЙСА ---
 function renderCurrentCard() {
+  // Если батч из 5 карточек закончился — бесшовно грузим следующий
   if (state.currentIndex >= state.cards.length) {
-    showFinishScreen();
+    loadNextBatch();
     return;
   }
 
@@ -136,23 +222,21 @@ function renderCurrentCard() {
   dom.cardExplanation.classList.add('hidden');
   dom.footerControls.style.visibility = 'visible';
 
-  // Собираем заголовок из новых полей taskId и theme
   dom.cardTopic.textContent = `${cardData.taskId} • ${cardData.theme}`;
 
-  // Берём текст из поля content (если там есть "..", красиво подсвечиваем пропуск)
-  const formattedWord = cardData.content.replace('..', '<span class="missing-dots">..</span>');
+  // Если контент содержит "..", подсвечиваем. Иначе выводим как есть.
+  const contentText = cardData.content || cardData.question || "";
+  const formattedWord = contentText.replace('..', '<span class="missing-dots">..</span>');
   dom.cardWord.innerHTML = formattedWord;
 
-  // Определяем подписи по бокам: для 'binary' — "Неверно"/"Верно", для 'choice' — буквы
-  const leftLabel = cardData.type === 'binary' ? 'Неверно' : cardData.options.left;
-  const rightLabel = cardData.type === 'binary' ? 'Верно' : cardData.options.right;
+  const leftLabel = cardData.type === 'binary' ? 'Неверно' : (cardData.options?.left || 'А');
+  const rightLabel = cardData.type === 'binary' ? 'Верно' : (cardData.options?.right || 'Б');
 
   dom.badgeLeft.textContent = leftLabel;
   dom.badgeRight.textContent = rightLabel;
   dom.btnTextLeft.textContent = leftLabel;
   dom.btnTextRight.textContent = rightLabel;
 
-  // Для длинных слов "Верно"/"Неверно" включаем широкий стиль боковых кнопок
   dom.badgeLeft.classList.toggle('binary-mode', cardData.type === 'binary');
   dom.badgeRight.classList.toggle('binary-mode', cardData.type === 'binary');
 
@@ -161,7 +245,7 @@ function renderCurrentCard() {
 }
 
 function updateHeaderStats() {
-  const total = state.cards.length;
+  const total = state.cards.length; // В батче до 5 карточек
   const current = Math.min(state.currentIndex + 1, total);
   const progressPercent = (state.currentIndex / total) * 100;
 
@@ -182,11 +266,7 @@ function resetBadges() {
 // --- 5. ОБРАБОТКА ЖЕСТОВ (POINTER EVENTS) ---
 function onPointerDown(e) {
   if (state.isAnimating) return;
-
-  // Если уже открыто правило — тап в любом месте карточки ведёт дальше
-  if (state.isExplanationMode) {
-    return;
-  }
+  if (state.isExplanationMode) return;
 
   state.isDragging = true;
   state.startX = e.clientX;
@@ -202,14 +282,12 @@ function onPointerMove(e) {
   if (!state.isDragging || state.isExplanationMode || state.isAnimating) return;
 
   const deltaX = e.clientX - state.startX;
-  const deltaY = (e.clientY - state.startY) * 0.25; // Небольшое вертикальное смещение
+  const deltaY = (e.clientY - state.startY) * 0.25;
   state.currentX = deltaX;
 
-  // Наклон карточки пропорционально смещению
   const rotate = deltaX * 0.06;
   dom.card.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) rotate(${rotate}deg)`;
 
-  // Анимация боковых бейджей с буквами
   const progress = Math.min(Math.abs(deltaX) / SWIPE_THRESHOLD, 1.3);
   if (deltaX < -10) {
     dom.badgeLeft.style.transform = `translateY(-50%) scale(${0.9 + progress * 0.35})`;
@@ -223,7 +301,6 @@ function onPointerMove(e) {
     resetBadges();
   }
 
-  // Лёгкий виброотклик при пересечении порога срабатывания свайпа
   if (Math.abs(deltaX) >= SWIPE_THRESHOLD && !state.crossedThreshold) {
     state.crossedThreshold = true;
     haptic.selection();
@@ -241,19 +318,16 @@ function onPointerUp(e) {
 
   resetBadges();
 
-  // 1. Проверка на одиночный ТАП ("Не знаю")
   if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD && !state.isExplanationMode) {
     handleDontKnow();
     return;
   }
 
-  // 2. Проверка на СВАЙП влево или вправо
   if (state.currentX <= -SWIPE_THRESHOLD) {
     processChoice('left');
   } else if (state.currentX >= SWIPE_THRESHOLD) {
     processChoice('right');
   } else {
-    // 3. Свайп не дотянут — плавно возвращаем карточку в центр
     dom.card.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)';
     dom.card.style.transform = 'translate3d(0, 0, 0) rotate(0deg)';
   }
@@ -264,13 +338,8 @@ function processChoice(direction) {
   if (state.isAnimating || state.isExplanationMode) return;
 
   const cardData = state.cards[state.currentIndex];
-
-  // Прибавляем +1 к общему числу решённых карточек в профиле
   state.storage.totalSwipes++;
 
-  // Проверяем ответ: direction ('left' или 'right') сравниваем с correctAnswer
-  // Для 'binary' свайп вправо ('right') = Верно
-  // Для 'choice' свайп влево ('left') = левый вариант, вправо ('right') = правый
   const isCorrect = direction === cardData.correctAnswer;
 
   if (isCorrect) {
@@ -279,7 +348,6 @@ function processChoice(direction) {
     handleCorrectAnswer(direction);
   } else {
     state.storage.wrongAnswers++;
-    // Если такой ошибки ещё нет в списке — добавляем её ID в mistakesArray
     if (!state.storage.mistakesArray.includes(cardData.id)) {
       state.storage.mistakesArray.push(cardData.id);
     }
@@ -288,18 +356,12 @@ function processChoice(direction) {
   }
 }
 
-/**
- * Сценарий: ПРАВИЛЬНЫЙ ОТВЕТ
- * Карточка загорается зелёным, улетает в сторону свайпа, загружается следующая
- */
 function handleCorrectAnswer(direction) {
   state.isAnimating = true;
   state.correctCount++;
   updateHeaderStats();
 
-  // Вибрация успеха
   haptic.notify('success');
-
   dom.card.classList.add('state-correct');
   const flyX = direction === 'left' ? -window.innerWidth * 1.2 : window.innerWidth * 1.2;
   const flyRotate = direction === 'left' ? -25 : 25;
@@ -314,19 +376,13 @@ function handleCorrectAnswer(direction) {
   }, 380);
 }
 
-/**
- * Сценарий: ОШИБКА
- * Карточка загорается красным, свайп отменяется (возврат в центр), показывается правило
- */
 function handleWrongAnswer() {
   state.isAnimating = true;
   state.wrongCount++;
   updateHeaderStats();
 
-  // Вибрация ошибки
   haptic.notify('error');
 
-  // Возвращаем карточку в центр и трясём
   dom.card.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)';
   dom.card.style.transform = 'translate3d(0, 0, 0) rotate(0deg)';
   dom.card.classList.add('state-wrong', 'shake');
@@ -338,10 +394,6 @@ function handleWrongAnswer() {
   }, 350);
 }
 
-/**
- * Сценарий: ТАП "НЕ ЗНАЮ"
- * Ошибка не засчитывается, сразу открывается правило
- */
 function handleDontKnow() {
   if (state.isAnimating || state.isExplanationMode) return;
   state.skippedCount++;
@@ -354,9 +406,6 @@ function handleDontKnow() {
   showExplanationOverlay('info');
 }
 
-/**
- * Показ оверлея с правильным ответом и объяснением на карточке
- */
 function showExplanationOverlay(mode) {
   state.isExplanationMode = true;
   const cardData = state.cards[state.currentIndex];
@@ -373,25 +422,12 @@ function showExplanationOverlay(mode) {
     dom.explanationStatus.className = 'status-pill info';
   }
 
-  // 1. Безопасно берём fullWord, а если его нет (например, в карточке типа binary) — берём content
-  // (В Python это аналогично: cardData.get('fullWord') or cardData['content'])
-  const textToShow = cardData.fullWord || cardData.content;
-
-  // 2. Подсвечиваем заглавную букву зелёным цветом
-  const highlightedWord = textToShow.replace(
-    /([А-ЯЁ])/g,
-    '<span class="highlight-letter">$1</span>'
-  );
-
+  const textToShow = cardData.fullWord || cardData.content || cardData.question || "";
+  const highlightedWord = textToShow.replace(/([А-ЯЁ])/g, '<span class="highlight-letter">$1</span>');
   dom.explanationWord.innerHTML = highlightedWord;
-
-  // 3. Подставляем текст правила из нового ключа explanation (вместо старого rule)
   dom.explanationRule.textContent = cardData.explanation;
 }
 
-/**
- * Переход к следующей карточке после прочтения правила
- */
 function goToNextCard(e) {
   if (e) e.stopPropagation();
   if (!state.isExplanationMode || state.isAnimating) return;
@@ -409,100 +445,69 @@ function goToNextCard(e) {
   }, 250);
 }
 
-// --- 7. ФИНАЛЬНЫЙ ЭКРАН И ПЕРЕЗАПУСК ---
-function showFinishScreen() {
-  dom.progressFill.style.width = '100%';
-  dom.finalCorrect.textContent = state.correctCount;
-  dom.finalWrong.textContent = state.wrongCount;
-  dom.finalSkipped.textContent = state.skippedCount;
-
-  dom.finishScreen.classList.remove('hidden');
-  haptic.notify('success');
-}
-
-function restartGame() {
-  haptic.impact('medium');
-  state.currentIndex = 0;
-  state.correctCount = 0;
-  state.wrongCount = 0;
-  state.skippedCount = 0;
-  // Перемешиваем карточки для повторного прохождения
-  state.cards = [...CARDS_DATA].sort(() => Math.random() - 0.5);
-
-  dom.finishScreen.classList.add('hidden');
-  renderCurrentCard();
-}
-
-// --- 8. ПОДПИСКА НА СОБЫТИЯ ---
+// --- 7. ПОДПИСКА НА СОБЫТИЯ ---
 dom.card.addEventListener('pointerdown', onPointerDown);
 dom.card.addEventListener('pointermove', onPointerMove);
 dom.card.addEventListener('pointerup', onPointerUp);
 dom.card.addEventListener('pointercancel', onPointerUp);
 
-// Переход дальше по кнопке "Понятно" или тапу по самой карточке в режиме объяснения
 dom.btnNext.addEventListener('click', goToNextCard);
 dom.cardExplanation.addEventListener('click', goToNextCard);
 
-// Дублирующие кнопки внизу экрана
 dom.btnSwipeLeft.addEventListener('click', () => processChoice('left'));
 dom.btnSwipeRight.addEventListener('click', () => processChoice('right'));
 dom.btnIdk.addEventListener('click', handleDontKnow);
-dom.btnRestart.addEventListener('click', restartGame);
 
-// --- 9. РОУТИНГ И НИЖНЯЯ НАВИГАЦИЯ (TabBar) ---
+// --- 8. РОУТИНГ И НИЖНЯЯ НАВИГАЦИЯ (TabBar) ---
 function switchTab(tabName) {
   state.currentTab = tabName;
   haptic.selection();
 
-  // Подсвечиваем активную кнопку внизу
   dom.tabButtons.forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
 
-  // Показываем нужный экран, остальные прячем
   dom.tabSwipes.classList.toggle('hidden', tabName !== 'swipes');
   dom.tabMistakes.classList.toggle('hidden', tabName !== 'mistakes');
   dom.tabProfile.classList.toggle('hidden', tabName !== 'profile');
 
-  // При открытии вкладки обновляем данные на ней
   if (tabName === 'mistakes') renderMistakesScreen();
   if (tabName === 'profile') renderProfileScreen();
 }
 
-// Обновляем красный кружок с цифрой на вкладке "Ошибки"
 function updateMistakesBadge() {
   const count = state.storage.mistakesArray.length;
   dom.mistakesBadge.textContent = count;
   dom.mistakesBadge.classList.toggle('hidden', count === 0);
 }
 
-// --- 10. ЭКРАН «ОШИБКИ» (MistakesScreen) ---
+// --- 9. ЭКРАН «ОШИБКИ» ---
 function renderMistakesScreen() {
   dom.mistakesList.innerHTML = '';
 
-  // Фильтруем общую базу: оставляем только те карточки, чьи ID есть в mistakesArray
-  const mistakeCards = CARDS_DATA.filter(card =>
+  // Фильтруем ошибки только из ТЕКУЩЕГО предмета
+  const mistakeCards = state.currentSubjectData.filter(card =>
     state.storage.mistakesArray.includes(card.id)
   );
 
-  // Если ошибок нет — показываем заглушку
   if (mistakeCards.length === 0) {
     dom.mistakesList.innerHTML = `
       <div class="empty-state">
-        🎉 У тебя нет неотработанных ошибок!<br>Продолжай решать карточки.
+        🎉 Нет неотработанных ошибок по этому предмету!<br>Продолжай решать карточки.
       </div>
     `;
     return;
   }
 
-  // Рисуем каждую карточку с ошибкой
   mistakeCards.forEach(card => {
     const item = document.createElement('div');
     item.className = 'mistake-item';
+    const textTitle = card.fullWord || card.content || card.question || "";
+
     item.innerHTML = `
       <div class="mistake-header">
         <div>
-          <div class="mistake-word">${card.fullWord || card.content}</div>
+          <div class="mistake-word">${textTitle}</div>
           <div class="mistake-theme">${card.taskId} • ${card.theme}</div>
         </div>
         <button class="btn-learned" type="button">Я выучил ✓</button>
@@ -510,17 +515,15 @@ function renderMistakesScreen() {
       <div class="mistake-explanation hidden">${card.explanation}</div>
     `;
 
-    // Клик по самой карточке открывает или прячет объяснение правила
     item.addEventListener('click', () => {
       haptic.selection();
       const expBox = item.querySelector('.mistake-explanation');
       expBox.classList.toggle('hidden');
     });
 
-    // Клик по кнопке "Я выучил" удаляет ID из массива ошибок и перерисовывает список
     const learnedBtn = item.querySelector('.btn-learned');
     learnedBtn.addEventListener('click', (e) => {
-      e.stopPropagation(); // Не даём клику сработать на родительскую карточку
+      e.stopPropagation();
       haptic.notify('success');
       state.storage.mistakesArray = state.storage.mistakesArray.filter(id => id !== card.id);
       saveStatsToStorage();
@@ -531,9 +534,8 @@ function renderMistakesScreen() {
   });
 }
 
-// --- 11. ЭКРАН «ПРОФИЛЬ» (Profile) ---
+// --- 10. ЭКРАН «ПРОФИЛЬ» ---
 function renderProfileScreen() {
-  // Если открыто в Telegram — подставляем реальное имя пользователя
   const tgUser = tg?.initDataUnsafe?.user;
   if (tgUser?.first_name) {
     dom.profileName.textContent = tgUser.first_name;
@@ -546,7 +548,6 @@ function renderProfileScreen() {
   dom.profWinrate.textContent = `${winrate}%`;
 }
 
-// Кнопка "Сбросить прогресс" в Профиле
 dom.btnResetProgress.addEventListener('click', () => {
   haptic.notify('warning');
   state.storage = {
@@ -559,13 +560,10 @@ dom.btnResetProgress.addEventListener('click', () => {
   renderProfileScreen();
 });
 
-// Вешаем клики на все 3 кнопки нижней навигации
 dom.tabButtons.forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 
-// Обновляем бейдж ошибок сразу при запуске приложения
 updateMistakesBadge();
-
-// Старт приложения
-renderCurrentCard();
+// renderCurrentCard() больше не вызываем при загрузке файла.
+// Он вызовется сам, когда пользователь выберет предмет.

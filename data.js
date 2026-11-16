@@ -1,58 +1,26 @@
-export const CARDS_DATA = [
-  {
-    id: 101,
-    taskId: "Задание 9",
-    theme: "Корни с чередованием",
-    type: "choice", // Тип: выбор между двумя буквами
-    content: "заг..релый",
-    fullWord: "загОрелый",
-    options: {
-      left: "А",
-      right: "О"
-    },
-    correctAnswer: "right", // Правильный свайп — вправо (буква О)
-    explanation: "В корнях -ГАР- / -ГОР- без ударения пишется буква О, под ударением — А (зага́р, но загоре́лый)."
-  },
-  {
-    id: 102,
-    taskId: "Задание 4",
-    theme: "Орфоэпия (Ударения)",
-    type: "binary", // Тип: бинарный вопрос (Верно / Неверно)
-    content: "красИвее",
-    fullWord: "красИвее (верно)",
-    options: {
-      left: "Неверно",
-      right: "Верно"
-    },
-    correctAnswer: "right", // Свайп вправо = утверждение верно
-    explanation: "Ударение в сравнительной степени прилагательного «красивый» всегда падает на корень — красИвее."
-  },
-  {
-    id: 103,
-    taskId: "Задание 10",
-    theme: "Приставки ПРЕ- и ПРИ-",
-    type: "choice",
-    content: "пр..одолеть",
-    fullWord: "прЕодолеть",
-    options: {
-      left: "Е",
-      right: "И"
-    },
-    correctAnswer: "left", // Правильный свайп — влево (буква Е)
-    explanation: "Приставка ПРЕ- близка по значению к ПЕРЕ- (преодолеть = пересилить)."
-  },
-  {
-    id: 104,
-    taskId: "Задание 4",
-    theme: "Орфоэпия (Ударения)",
-    type: "binary",
-    content: "звОнит",
-    fullWord: "звонИт (ударение на И)",
-    options: {
-      left: "Неверно",
-      right: "Верно"
-    },
-    correctAnswer: "left", // Свайп влево = ударение поставлено неверно
-    explanation: "В глаголе «звонить» и всех его формах ударение фиксированное и падает на окончание: звонИт, звонИшь, перезвонИм."
+// Файл: data.js
+// Диспетчер баз данных: сам вызывает нужный файл при выборе предмета
+
+export async function loadSubjectDatabase(subjectKey) {
+  switch (subjectKey) {
+    case 'russian': {
+      const module = await import('./db/data_russian_language.js');
+      return module.data_russian_language;
+    }
+    case 'social': {
+      const module = await import('./db/data_social_studies.js');
+      return module.data_social_studies;
+    }
+    case 'math_profile': {
+      const module = await import('./db/data_math_profile.js');
+      return module.data_math_profile;
+    }
+    case 'math_basic': {
+      const module = await import('./db/data_math_basic.js');
+      return module.data_math_basic;
+    }
+    default:
+      console.error(`Неизвестный ключ предмета: ${subjectKey}`);
+      return [];
   }
-];
+}
