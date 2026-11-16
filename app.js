@@ -12,15 +12,9 @@ if (tg) {
 }
 
 const haptic = {
-  selection() {
-    tg?.HapticFeedback?.selectionChanged();
-  },
-  impact(style = 'light') {
-    tg?.HapticFeedback?.impactOccurred(style);
-  },
-  notify(type = 'success') {
-    tg?.HapticFeedback?.notificationOccurred(type);
-  }
+  selection() { tg?.HapticFeedback?.selectionChanged?.(); },
+  impact(style = 'light') { tg?.HapticFeedback?.impactOccurred?.(style); },
+  notify(type = 'success') { tg?.HapticFeedback?.notificationOccurred?.(type); }
 };
 
 // --- 2. ЭЛЕМЕНТЫ DOM ---
@@ -74,27 +68,43 @@ const dom = {
   btnResetProgress: document.getElementById('btn-reset-progress')
 };
 
-// --- 3. СОСТОЯНИЕ ПРИЛОЖЕНИЯ ---
+// --- 3. БРОНЕБОЙНАЯ ЗАЩИТА ПАМЯТИ ---
 const SWIPE_THRESHOLD = 95;
 const TAP_THRESHOLD = 8;
 const BATCH_SIZE = 5;
 const STORAGE_KEY = 'ege_tinder_stats_v1';
 
-const savedStats = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
+// Гарантируем, что статистика всегда имеет правильную структуру
+let savedStats = {
   totalSwipes: 0,
   correctAnswers: 0,
   wrongAnswers: 0,
   mistakesArray: []
 };
 
+try {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw);
+    savedStats = {
+      totalSwipes: typeof parsed.totalSwipes === 'number' ? parsed.totalSwipes : 0,
+      correctAnswers: typeof parsed.correctAnswers === 'number' ? parsed.correctAnswers : 0,
+      wrongAnswers: typeof parsed.wrongAnswers === 'number' ? parsed.wrongAnswers : 0,
+      // Главный фикс: если массива ошибок не было в старой памяти, создаем пустой
+      mistakesArray: Array.isArray(parsed.mistakesArray) ? parsed.mistakesArray : []
+    };
+  }
+} catch (e) {
+  console.error('Ошибка чтения памяти, статистика сброшена.', e);
+}
+
 let state = {
   currentTab: 'swipes',
   storage: savedStats,
-
-  hasActiveSubject: false, // Выбран ли сейчас предмет
-  currentSubjectData: [],  // Полная база текущего предмета
-  seenCardIds: new Set(),  // ID пройденных карточек в рамках круга
-  cards: [],               // Текущий батч (до 5 карточек)
+  hasActiveSubject: false,
+  currentSubjectData: [],
+  seenCardIds: new Set(),
+  cards: [],
 
   currentIndex: 0,
   correctCount: 0,
@@ -122,7 +132,7 @@ function shuffleArray(array) {
   }
 }
 
-// --- 3.1 ВЫБОР ПРЕДМЕТА ---
+// --- 3.1 ВЫБОР ПРЕДМЕТА И АВТО-КОНВЕРТЕР БАЗ ---
 dom.subjectButtons.forEach(btn => {
   btn.addEventListener('click', async (e) => {
     const subjectKey = e.currentTarget.getAttribute('data-subject');
@@ -134,20 +144,48 @@ async function startSession(subjectKey) {
   try {
     const rawData = await loadSubjectDatabase(subjectKey);
     if (!rawData || rawData.length === 0) {
-      alert(`База данных для предмета "${subjectKey}" пуста или не найдена в папке db/!`);
+      if (tg?.showAlert) tg.showAlert(`База данных для "${subjectKey}" пуста!`);
       return;
     }
 
-    state.currentSubjectData = JSON.parse(JSON.stringify(rawData));
+    let parsedData = JSON.parse(JSON.stringify(rawData));
+
+    // Авто-конвертер старых форматов
+    parsedData = parsedData.map(card => {
+      if (typeof card.correctAnswer === 'undefined' && typeof card.correct !== 'undefined') {
+        let leftOpt = card.options[0] || "А";
+        let rightOpt = card.options[1] || "Б";
+        let correctDir = "left";
+
+        if (card.correct === 0) { leftOpt = card.options[0]; rightOpt = card.options[1]; correctDir = "left"; }
+        else if (card.correct === 1) { leftOpt = card.options[0]; rightOpt = card.options[1]; correctDir = "right"; }
+        else if (card.correct === 2) { leftOpt = card.options[2]; rightOpt = card.options[1]; correctDir = "left"; }
+        else if (card.correct === 3) { leftOpt = card.options[0]; rightOpt = card.options[3]; correctDir = "right"; }
+
+        return {
+          id: `old_${card.id || Math.random()}`,
+          taskId: "Старый формат",
+          theme: "Файл не обновлен",
+          content: card.question || card.content || "",
+          type: "choice",
+          options: { left: leftOpt, right: rightOpt },
+          correctAnswer: correctDir,
+          explanation: card.explanation || "Ты забыл обновить файл базы данных на GitHub!"
+        };
+      }
+      return card;
+    });
+
+    state.currentSubjectData = parsedData;
     shuffleArray(state.currentSubjectData);
     state.seenCardIds.clear();
     state.hasActiveSubject = true;
-
+    state.isAnimating = false;
+    state.isExplanationMode = false;
     state.correctCount = 0;
     state.wrongCount = 0;
     state.skippedCount = 0;
 
-    // Переключаемся на вкладку заданий и скрываем стартовый экран
     switchTab('swipes');
     dom.startScreen.classList.add('hidden');
     dom.finishScreen?.classList.add('hidden');
@@ -160,7 +198,7 @@ async function startSession(subjectKey) {
     loadNextBatch();
   } catch (err) {
     console.error('Ошибка загрузки БД:', err);
-    alert('Ошибка загрузки файла БД! Проверь, что папка db/ и все 4 файла внутри неё загружены на GitHub.');
+    if (tg?.showAlert) tg.showAlert('Ошибка загрузки файла БД из папки db/ !');
   }
 }
 
@@ -178,16 +216,12 @@ function goBackToMenu() {
 function loadNextBatch() {
   let unseen = state.currentSubjectData.filter(c => !state.seenCardIds.has(c.id));
 
-  // Если все 20 карточек пройдены — зацикливаем и начинаем сначала
   if (unseen.length === 0) {
     state.seenCardIds.clear();
     shuffleArray(state.currentSubjectData);
     unseen = [...state.currentSubjectData];
-
     haptic.notify('success');
-    if (tg?.showAlert) {
-      tg.showAlert('Все задания пройдены! Начинаем новый круг с перемешанной колодой.');
-    }
+    if (tg?.showAlert) tg.showAlert('Все задания пройдены! Начинаем новый круг.');
   }
 
   const batch = unseen.slice(0, BATCH_SIZE);
@@ -195,15 +229,13 @@ function loadNextBatch() {
 
   state.cards = batch;
   state.currentIndex = 0;
-
   renderCurrentCard();
 }
 
-// --- 4. ОТРИСОВКА КАРТОЧКИ И ИНТЕРФЕЙСА ---
+// --- 4. ОТРИСОВКА КАРТОЧКИ ---
 function renderCurrentCard() {
   if (!dom.card || state.cards.length === 0) return;
 
-  // Если текущая пятерка карточек закончилась — выдаем следующую пятерку
   if (state.currentIndex >= state.cards.length) {
     loadNextBatch();
     return;
@@ -227,8 +259,6 @@ function renderCurrentCard() {
   const contentText = cardData.content || cardData.question || '';
   const formattedWord = contentText.replace('..', '<span class="missing-dots">..</span>');
   dom.cardWord.innerHTML = formattedWord;
-
-  // Если текст длинный (обществознание/математика) — уменьшаем шрифт, чтобы влезло
   dom.cardWord.classList.toggle('long-text', contentText.length > 22);
 
   const leftLabel = cardData.type === 'binary' ? 'Неверно' : (cardData.options?.left ?? cardData.options?.[0] ?? 'А');
@@ -239,7 +269,7 @@ function renderCurrentCard() {
   dom.btnTextLeft.textContent = leftLabel;
   dom.btnTextRight.textContent = rightLabel;
 
-  const isLongBadge = cardData.type === 'binary' || leftLabel.length > 2 || rightLabel.length > 2;
+  const isLongBadge = cardData.type === 'binary' || String(leftLabel).length > 2 || String(rightLabel).length > 2;
   dom.badgeLeft.classList.toggle('binary-mode', cardData.type === 'binary');
   dom.badgeRight.classList.toggle('binary-mode', cardData.type === 'binary');
   dom.badgeLeft.classList.toggle('long-option', isLongBadge);
@@ -268,23 +298,20 @@ function resetBadges() {
   dom.badgeRight.classList.remove('active');
 }
 
-// --- 5. ОБРАБОТКА ЖЕСТОВ (POINTER EVENTS) ---
+// --- 5. ОБРАБОТКА ЖЕСТОВ ---
 function onPointerDown(e) {
   if (!state.hasActiveSubject || state.isAnimating || state.isExplanationMode) return;
-
   state.isDragging = true;
   state.startX = e.clientX;
   state.startY = e.clientY;
   state.currentX = 0;
   state.crossedThreshold = false;
-
   dom.card.style.transition = 'none';
-  dom.card.setPointerCapture(e.pointerId);
+  try { dom.card.setPointerCapture(e.pointerId); } catch(err){}
 }
 
 function onPointerMove(e) {
   if (!state.isDragging || state.isExplanationMode || state.isAnimating) return;
-
   const deltaX = e.clientX - state.startX;
   const deltaY = (e.clientY - state.startY) * 0.25;
   state.currentX = deltaX;
@@ -316,17 +343,14 @@ function onPointerMove(e) {
 function onPointerUp(e) {
   if (!state.isDragging) return;
   state.isDragging = false;
-
   const absX = Math.abs(state.currentX);
   const absY = Math.abs(e.clientY - state.startY);
-
   resetBadges();
 
   if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD && !state.isExplanationMode) {
     handleDontKnow();
     return;
   }
-
   if (state.currentX <= -SWIPE_THRESHOLD) {
     processChoice('left');
   } else if (state.currentX >= SWIPE_THRESHOLD) {
@@ -337,29 +361,32 @@ function onPointerUp(e) {
   }
 }
 
-// --- 6. ИГРОВАЯ ЛОГИКА И ПРОВЕРКА ОТВЕТА ---
+// --- 6. ИГРОВАЯ ЛОГИКА ---
 function processChoice(direction) {
-  if (!state.hasActiveSubject || state.cards.length === 0) return;
-  if (state.isAnimating || state.isExplanationMode) return;
+  try {
+    if (!state.hasActiveSubject || state.cards.length === 0) return;
+    if (state.isAnimating || state.isExplanationMode) return;
 
-  const cardData = state.cards[state.currentIndex];
-  if (!cardData) return;
+    const cardData = state.cards[state.currentIndex];
+    if (!cardData) return;
 
-  state.storage.totalSwipes++;
+    state.storage.totalSwipes++;
+    const isCorrect = direction === cardData.correctAnswer;
 
-  const isCorrect = direction === cardData.correctAnswer;
-
-  if (isCorrect) {
-    state.storage.correctAnswers++;
-    saveStatsToStorage();
-    handleCorrectAnswer(direction);
-  } else {
-    state.storage.wrongAnswers++;
-    if (!state.storage.mistakesArray.includes(cardData.id)) {
-      state.storage.mistakesArray.push(cardData.id);
+    if (isCorrect) {
+      state.storage.correctAnswers++;
+      saveStatsToStorage();
+      handleCorrectAnswer(direction);
+    } else {
+      state.storage.wrongAnswers++;
+      if (!state.storage.mistakesArray.includes(cardData.id)) {
+        state.storage.mistakesArray.push(cardData.id);
+      }
+      saveStatsToStorage();
+      handleWrongAnswer();
     }
-    saveStatsToStorage();
-    handleWrongAnswer();
+  } catch (err) {
+    console.error("Ошибка при проверке ответа:", err);
   }
 }
 
@@ -367,8 +394,8 @@ function handleCorrectAnswer(direction) {
   state.isAnimating = true;
   state.correctCount++;
   updateHeaderStats();
-
   haptic.notify('success');
+
   dom.card.classList.add('state-correct');
   const flyX = direction === 'left' ? -window.innerWidth * 1.2 : window.innerWidth * 1.2;
   const flyRotate = direction === 'left' ? -25 : 25;
@@ -387,7 +414,6 @@ function handleWrongAnswer() {
   state.isAnimating = true;
   state.wrongCount++;
   updateHeaderStats();
-
   haptic.notify('error');
 
   dom.card.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)';
@@ -405,8 +431,8 @@ function handleDontKnow() {
   if (!state.hasActiveSubject || state.cards.length === 0) return;
   if (state.isAnimating || state.isExplanationMode) return;
   state.skippedCount++;
-
   haptic.impact('medium');
+
   dom.card.style.transition = 'transform 0.25s ease';
   dom.card.style.transform = 'translate3d(0, 0, 0) rotate(0deg)';
   dom.card.classList.add('state-info');
@@ -440,7 +466,6 @@ function showExplanationOverlay(mode) {
 function goToNextCard(e) {
   if (e) e.stopPropagation();
   if (!state.isExplanationMode || state.isAnimating) return;
-
   haptic.impact('light');
   state.isAnimating = true;
 
@@ -454,7 +479,7 @@ function goToNextCard(e) {
   }, 250);
 }
 
-// --- 7. ПОДПИСКА НА СОБЫТИЯ (С БЕЗОПАСНОЙ ПРОВЕРКОЙ) ---
+// --- 7. ПОДПИСКА НА СОБЫТИЯ ---
 dom.card?.addEventListener('pointerdown', onPointerDown);
 dom.card?.addEventListener('pointermove', onPointerMove);
 dom.card?.addEventListener('pointerup', onPointerUp);
@@ -471,9 +496,8 @@ dom.btnRestart?.addEventListener('click', () => {
   loadNextBatch();
 });
 
-// --- 8. РОУТИНГ И НИЖНЯЯ НАВИГАЦИЯ (TabBar) ---
+// --- 8. РОУТИНГ И НИЖНЯЯ НАВИГАЦИЯ ---
 function switchTab(tabName) {
-  // Если пользователь уже в вкладке "Задания" и кликает на "Задания" повторно — возвращаем выбор предмета
   if (tabName === 'swipes' && state.currentTab === 'swipes' && state.hasActiveSubject) {
     goBackToMenu();
     return;
@@ -486,11 +510,9 @@ function switchTab(tabName) {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
 
-  // Если перешли в "Ошибки" или "Профиль" — прячем стартовый экран, чтобы он не загораживал контент
   if (tabName !== 'swipes') {
     dom.startScreen.classList.add('hidden');
   } else if (!state.hasActiveSubject) {
-    // Если вернулись в "Задания", а предмет еще не выбран — показываем стартовый экран
     dom.startScreen.classList.remove('hidden');
   }
 
@@ -511,7 +533,6 @@ function updateMistakesBadge() {
 // --- 9. ЭКРАН «ОШИБКИ» ---
 function renderMistakesScreen() {
   dom.mistakesList.innerHTML = '';
-
   const mistakeCards = state.currentSubjectData.filter(card =>
     state.storage.mistakesArray.includes(card.id)
   );
@@ -531,33 +552,29 @@ function renderMistakesScreen() {
     const item = document.createElement('div');
     item.className = 'mistake-item';
     const textTitle = card.fullWord || card.content || card.question || '';
-
     item.innerHTML = `
       <div class="mistake-header">
         <div>
           <div class="mistake-word">${textTitle}</div>
-          <div class="mistake-theme">${card.taskId} • ${card.theme}</div>
+          <div class="mistake-theme">${card.taskId || 'Задание'} • ${card.theme || 'Тренировка'}</div>
         </div>
         <button class="btn-learned" type="button">Я выучил ✓</button>
       </div>
-      <div class="mistake-explanation hidden">${card.explanation}</div>
+      <div class="mistake-explanation hidden">${card.explanation || ''}</div>
     `;
 
     item.addEventListener('click', () => {
       haptic.selection();
-      const expBox = item.querySelector('.mistake-explanation');
-      expBox.classList.toggle('hidden');
+      item.querySelector('.mistake-explanation').classList.toggle('hidden');
     });
 
-    const learnedBtn = item.querySelector('.btn-learned');
-    learnedBtn.addEventListener('click', (e) => {
+    item.querySelector('.btn-learned').addEventListener('click', (e) => {
       e.stopPropagation();
       haptic.notify('success');
       state.storage.mistakesArray = state.storage.mistakesArray.filter(id => id !== card.id);
       saveStatsToStorage();
       renderMistakesScreen();
     });
-
     dom.mistakesList.appendChild(item);
   });
 }
@@ -571,19 +588,13 @@ function renderProfileScreen() {
 
   const { totalSwipes, correctAnswers } = state.storage;
   const winrate = totalSwipes > 0 ? Math.round((correctAnswers / totalSwipes) * 100) : 0;
-
   dom.profTotal.textContent = totalSwipes;
   dom.profWinrate.textContent = `${winrate}%`;
 }
 
 dom.btnResetProgress?.addEventListener('click', () => {
   haptic.notify('warning');
-  state.storage = {
-    totalSwipes: 0,
-    correctAnswers: 0,
-    wrongAnswers: 0,
-    mistakesArray: []
-  };
+  state.storage = { totalSwipes: 0, correctAnswers: 0, wrongAnswers: 0, mistakesArray: [] };
   saveStatsToStorage();
   renderProfileScreen();
 });
