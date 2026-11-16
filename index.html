@@ -6,7 +6,7 @@
     <title>ЕГЭ Тиндер — Свайп-тренажёр</title>
     <!-- Подключение официального SDK Telegram WebApp -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 
@@ -46,9 +46,32 @@
                 <div class="choice-badge choice-left" id="badge-left">А</div>
                 <div class="choice-badge choice-right" id="badge-right">О</div>
 
-                <!-- КОНТЕЙНЕР ДЛЯ КАРТОЧЕК (Сюда JS будет рендерить по 5 штук) -->
-                <div id="tinder-cards-container" class="card-stack">
-                    <!-- JS динамически добавит карточки сюда -->
+                <!-- Стек карточек (ВОЗВРАЩЕНА ВЕРСТКА КАРТОЧКИ) -->
+                <div class="card-stack" id="tinder-cards-container">
+                    <!-- Фоновая декоративная карточка для эффекта глубины -->
+                    <div class="card-Back"></div>
+
+                    <!-- Основная интерактивная карточка -->
+                    <div class="card" id="active-card">
+
+                        <!-- Лицевая сторона (вопрос) -->
+                        <div class="card-face card-front" id="card-front">
+                            <span class="topic-tag" id="card-topic">Орфография • Задание 9</span>
+                            <h1 class="word-title" id="card-word">заг..рать</h1>
+                            <p class="tap-hint">👆 Тапни по карточке, если не знаешь ответ</p>
+                        </div>
+
+                        <!-- Оверлей разбора (показывается при ошибке или нажатии "Не знаю") -->
+                        <div class="card-explanation hidden" id="card-explanation">
+                            <div class="status-pill" id="explanation-status">Ошибка</div>
+                            <h2 class="full-word" id="explanation-word">загОрать</h2>
+                            <div class="rule-box">
+                                <p id="explanation-rule">Текст правила...</p>
+                            </div>
+                            <button class="btn-primary" id="btn-next" type="button">Понятно →</button>
+                        </div>
+
+                    </div>
                 </div>
             </main>
 
@@ -93,7 +116,6 @@
         <div id="tab-mistakes" class="tab-view hidden">
             <h2 class="screen-title">Мои ошибки 🧠</h2>
             <p class="screen-subtitle">Нажми на карточку, чтобы увидеть правило</p>
-            <!-- Контейнер, куда JS будет рендерить список ошибок -->
             <div id="mistakes-list" class="mistakes-list"></div>
         </div>
 
@@ -121,7 +143,7 @@
             </div>
         </div>
 
-        <!-- НИЖНЯЯ НАВИГАЦИЯ (TabBar) -->
+        <!-- НИЖНЯЯ НАВИГАЦИЯ (TabBar — теперь видна всегда) -->
         <nav class="tab-bar">
             <button class="tab-btn active" data-tab="swipes" type="button">
                 <span class="tab-icon">🔥</span>
@@ -136,10 +158,9 @@
                 <span class="tab-label">Профиль</span>
             </button>
         </nav>
-    </div> <!-- Конец .app-container -->
+    </div>
 
     <!-- 3. Подключение логики -->
-    <!-- Атрибут type="module" позволяет использовать import/export в app.js -->
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=3"></script>
 </body>
 </html>

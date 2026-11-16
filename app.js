@@ -5,16 +5,12 @@ const tg = window.Telegram?.WebApp;
 
 if (tg) {
   tg.ready();
-  tg.expand(); // Раскрываем Mini App на всю высоту экрана
-  // Отключаем вертикальные свайпы закрытия Telegram (доступно с версии Bot API 7.7+)
+  tg.expand();
   if (typeof tg.disableVerticalSwipes === 'function') {
     tg.disableVerticalSwipes();
   }
 }
 
-/**
- * Обёртка над Telegram HapticFeedback с безопасным фоллбэком
- */
 const haptic = {
   selection() {
     tg?.HapticFeedback?.selectionChanged();
@@ -29,11 +25,9 @@ const haptic = {
 
 // --- 2. ЭЛЕМЕНТЫ DOM ---
 const dom = {
-  // Элементы стартового экрана
   startScreen: document.getElementById('start-screen'),
   subjectButtons: document.querySelectorAll('.subject-btn'),
 
-  // Элементы карточки
   card: document.getElementById('active-card'),
   cardFront: document.getElementById('card-front'),
   cardExplanation: document.getElementById('card-explanation'),
@@ -83,7 +77,7 @@ const dom = {
 // --- 3. СОСТОЯНИЕ ПРИЛОЖЕНИЯ ---
 const SWIPE_THRESHOLD = 95;
 const TAP_THRESHOLD = 8;
-const BATCH_SIZE = 5; // Размер порции карточек
+const BATCH_SIZE = 5;
 const STORAGE_KEY = 'ege_tinder_stats_v1';
 
 const savedStats = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
@@ -97,9 +91,10 @@ let state = {
   currentTab: 'swipes',
   storage: savedStats,
 
-  currentSubjectData: [], // Полная база текущего предмета
-  seenCardIds: new Set(), // ID пройденных карточек в рамках круга
-  cards: [],              // Текущий батч (до 5 карточек)
+  hasActiveSubject: false, // Выбран ли сейчас предмет
+  currentSubjectData: [],  // Полная база текущего предмета
+  seenCardIds: new Set(),  // ID пройденных карточек в рамках круга
+  cards: [],               // Текущий батч (до 5 карточек)
 
   currentIndex: 0,
   correctCount: 0,
@@ -120,7 +115,6 @@ function saveStatsToStorage() {
   updateMistakesBadge();
 }
 
-// Утилита: Алгоритм Фишера-Йетса для идеального рандома
 function shuffleArray(array) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -128,7 +122,7 @@ function shuffleArray(array) {
   }
 }
 
-// --- 3.1 РОУТИНГ ПРЕДМЕТОВ (НОВОЕ ИЗ ШАГА 5) ---
+// --- 3.1 ВЫБОР ПРЕДМЕТА ---
 dom.subjectButtons.forEach(btn => {
   btn.addEventListener('click', async (e) => {
     const subjectKey = e.currentTarget.getAttribute('data-subject');
@@ -137,46 +131,54 @@ dom.subjectButtons.forEach(btn => {
 });
 
 async function startSession(subjectKey) {
-  // Подгружаем базу данных динамически
-  const rawData = await loadSubjectDatabase(subjectKey);
-  if (!rawData || rawData.length === 0) return;
+  try {
+    const rawData = await loadSubjectDatabase(subjectKey);
+    if (!rawData || rawData.length === 0) {
+      alert(`База данных для предмета "${subjectKey}" пуста или не найдена в папке db/!`);
+      return;
+    }
 
-  // Копируем и перемешиваем колоду
-  state.currentSubjectData = JSON.parse(JSON.stringify(rawData));
-  shuffleArray(state.currentSubjectData);
-  state.seenCardIds.clear(); // Сбрасываем прогресс круга
+    state.currentSubjectData = JSON.parse(JSON.stringify(rawData));
+    shuffleArray(state.currentSubjectData);
+    state.seenCardIds.clear();
+    state.hasActiveSubject = true;
 
-  // Сбрасываем локальную статистику сессии (не глобальную)
-  state.correctCount = 0;
-  state.wrongCount = 0;
-  state.skippedCount = 0;
+    state.correctCount = 0;
+    state.wrongCount = 0;
+    state.skippedCount = 0;
 
-  // Скрываем меню, показываем интерфейс
-  dom.startScreen.classList.add('hidden');
+    // Переключаемся на вкладку заданий и скрываем стартовый экран
+    switchTab('swipes');
+    dom.startScreen.classList.add('hidden');
+    dom.finishScreen?.classList.add('hidden');
 
-  if (tg?.BackButton) {
-    tg.BackButton.show();
-    tg.BackButton.onClick(goBackToMenu);
+    if (tg?.BackButton) {
+      tg.BackButton.show();
+      tg.BackButton.onClick(goBackToMenu);
+    }
+
+    loadNextBatch();
+  } catch (err) {
+    console.error('Ошибка загрузки БД:', err);
+    alert('Ошибка загрузки файла БД! Проверь, что папка db/ и все 4 файла внутри неё загружены на GitHub.');
   }
-
-  // Загружаем первые 5 карточек
-  loadNextBatch();
 }
 
 function goBackToMenu() {
+  state.hasActiveSubject = false;
+  switchTab('swipes');
   dom.startScreen.classList.remove('hidden');
   if (tg?.BackButton) {
     tg.BackButton.hide();
-    tg.BackButton.offClick(goBackToMenu); // отписываемся от события
+    tg.BackButton.offClick(goBackToMenu);
   }
 }
 
-// --- 3.2 ЛОГИКА БАТЧЕЙ (ПОРЦИЙ ПО 5 ШТУК) ---
+// --- 3.2 ВЫДАЧА БАТЧАМИ ПО 5 КАРТОЧЕК ---
 function loadNextBatch() {
-  // Ищем карточки, которые в этом круге еще не показывались
   let unseen = state.currentSubjectData.filter(c => !state.seenCardIds.has(c.id));
 
-  // Если не пройденных не осталось — круг завершён, зацикливаем!
+  // Если все 20 карточек пройдены — зацикливаем и начинаем сначала
   if (unseen.length === 0) {
     state.seenCardIds.clear();
     shuffleArray(state.currentSubjectData);
@@ -188,13 +190,9 @@ function loadNextBatch() {
     }
   }
 
-  // Берем до 5 карточек
   const batch = unseen.slice(0, BATCH_SIZE);
-
-  // Запоминаем, что мы их выдали
   batch.forEach(c => state.seenCardIds.add(c.id));
 
-  // Устанавливаем текущий батч в качестве активной колоды
   state.cards = batch;
   state.currentIndex = 0;
 
@@ -203,7 +201,9 @@ function loadNextBatch() {
 
 // --- 4. ОТРИСОВКА КАРТОЧКИ И ИНТЕРФЕЙСА ---
 function renderCurrentCard() {
-  // Если батч из 5 карточек закончился — бесшовно грузим следующий
+  if (!dom.card || state.cards.length === 0) return;
+
+  // Если текущая пятерка карточек закончилась — выдаем следующую пятерку
   if (state.currentIndex >= state.cards.length) {
     loadNextBatch();
     return;
@@ -222,32 +222,37 @@ function renderCurrentCard() {
   dom.cardExplanation.classList.add('hidden');
   dom.footerControls.style.visibility = 'visible';
 
-  dom.cardTopic.textContent = `${cardData.taskId} • ${cardData.theme}`;
+  dom.cardTopic.textContent = `${cardData.taskId || 'ЕГЭ'} • ${cardData.theme || 'Тренировка'}`;
 
-  // Если контент содержит "..", подсвечиваем. Иначе выводим как есть.
-  const contentText = cardData.content || cardData.question || "";
+  const contentText = cardData.content || cardData.question || '';
   const formattedWord = contentText.replace('..', '<span class="missing-dots">..</span>');
   dom.cardWord.innerHTML = formattedWord;
 
-  const leftLabel = cardData.type === 'binary' ? 'Неверно' : (cardData.options?.left || 'А');
-  const rightLabel = cardData.type === 'binary' ? 'Верно' : (cardData.options?.right || 'Б');
+  // Если текст длинный (обществознание/математика) — уменьшаем шрифт, чтобы влезло
+  dom.cardWord.classList.toggle('long-text', contentText.length > 22);
+
+  const leftLabel = cardData.type === 'binary' ? 'Неверно' : (cardData.options?.left ?? cardData.options?.[0] ?? 'А');
+  const rightLabel = cardData.type === 'binary' ? 'Верно' : (cardData.options?.right ?? cardData.options?.[1] ?? 'Б');
 
   dom.badgeLeft.textContent = leftLabel;
   dom.badgeRight.textContent = rightLabel;
   dom.btnTextLeft.textContent = leftLabel;
   dom.btnTextRight.textContent = rightLabel;
 
+  const isLongBadge = cardData.type === 'binary' || leftLabel.length > 2 || rightLabel.length > 2;
   dom.badgeLeft.classList.toggle('binary-mode', cardData.type === 'binary');
   dom.badgeRight.classList.toggle('binary-mode', cardData.type === 'binary');
+  dom.badgeLeft.classList.toggle('long-option', isLongBadge);
+  dom.badgeRight.classList.toggle('long-option', isLongBadge);
 
   resetBadges();
   updateHeaderStats();
 }
 
 function updateHeaderStats() {
-  const total = state.cards.length; // В батче до 5 карточек
-  const current = Math.min(state.currentIndex + 1, total);
-  const progressPercent = (state.currentIndex / total) * 100;
+  const total = state.cards.length;
+  const current = total > 0 ? Math.min(state.currentIndex + 1, total) : 0;
+  const progressPercent = total > 0 ? (state.currentIndex / total) * 100 : 0;
 
   dom.counterCurrent.textContent = current;
   dom.counterTotal.textContent = total;
@@ -265,8 +270,7 @@ function resetBadges() {
 
 // --- 5. ОБРАБОТКА ЖЕСТОВ (POINTER EVENTS) ---
 function onPointerDown(e) {
-  if (state.isAnimating) return;
-  if (state.isExplanationMode) return;
+  if (!state.hasActiveSubject || state.isAnimating || state.isExplanationMode) return;
 
   state.isDragging = true;
   state.startX = e.clientX;
@@ -335,9 +339,12 @@ function onPointerUp(e) {
 
 // --- 6. ИГРОВАЯ ЛОГИКА И ПРОВЕРКА ОТВЕТА ---
 function processChoice(direction) {
+  if (!state.hasActiveSubject || state.cards.length === 0) return;
   if (state.isAnimating || state.isExplanationMode) return;
 
   const cardData = state.cards[state.currentIndex];
+  if (!cardData) return;
+
   state.storage.totalSwipes++;
 
   const isCorrect = direction === cardData.correctAnswer;
@@ -395,6 +402,7 @@ function handleWrongAnswer() {
 }
 
 function handleDontKnow() {
+  if (!state.hasActiveSubject || state.cards.length === 0) return;
   if (state.isAnimating || state.isExplanationMode) return;
   state.skippedCount++;
 
@@ -409,6 +417,7 @@ function handleDontKnow() {
 function showExplanationOverlay(mode) {
   state.isExplanationMode = true;
   const cardData = state.cards[state.currentIndex];
+  if (!cardData) return;
 
   dom.cardFront.classList.add('hidden');
   dom.cardExplanation.classList.remove('hidden');
@@ -422,10 +431,10 @@ function showExplanationOverlay(mode) {
     dom.explanationStatus.className = 'status-pill info';
   }
 
-  const textToShow = cardData.fullWord || cardData.content || cardData.question || "";
+  const textToShow = cardData.fullWord || cardData.content || cardData.question || '';
   const highlightedWord = textToShow.replace(/([А-ЯЁ])/g, '<span class="highlight-letter">$1</span>');
   dom.explanationWord.innerHTML = highlightedWord;
-  dom.explanationRule.textContent = cardData.explanation;
+  dom.explanationRule.textContent = cardData.explanation || '';
 }
 
 function goToNextCard(e) {
@@ -445,27 +454,45 @@ function goToNextCard(e) {
   }, 250);
 }
 
-// --- 7. ПОДПИСКА НА СОБЫТИЯ ---
-dom.card.addEventListener('pointerdown', onPointerDown);
-dom.card.addEventListener('pointermove', onPointerMove);
-dom.card.addEventListener('pointerup', onPointerUp);
-dom.card.addEventListener('pointercancel', onPointerUp);
+// --- 7. ПОДПИСКА НА СОБЫТИЯ (С БЕЗОПАСНОЙ ПРОВЕРКОЙ) ---
+dom.card?.addEventListener('pointerdown', onPointerDown);
+dom.card?.addEventListener('pointermove', onPointerMove);
+dom.card?.addEventListener('pointerup', onPointerUp);
+dom.card?.addEventListener('pointercancel', onPointerUp);
 
-dom.btnNext.addEventListener('click', goToNextCard);
-dom.cardExplanation.addEventListener('click', goToNextCard);
+dom.btnNext?.addEventListener('click', goToNextCard);
+dom.cardExplanation?.addEventListener('click', goToNextCard);
 
-dom.btnSwipeLeft.addEventListener('click', () => processChoice('left'));
-dom.btnSwipeRight.addEventListener('click', () => processChoice('right'));
-dom.btnIdk.addEventListener('click', handleDontKnow);
+dom.btnSwipeLeft?.addEventListener('click', () => processChoice('left'));
+dom.btnSwipeRight?.addEventListener('click', () => processChoice('right'));
+dom.btnIdk?.addEventListener('click', handleDontKnow);
+dom.btnRestart?.addEventListener('click', () => {
+  dom.finishScreen?.classList.add('hidden');
+  loadNextBatch();
+});
 
 // --- 8. РОУТИНГ И НИЖНЯЯ НАВИГАЦИЯ (TabBar) ---
 function switchTab(tabName) {
+  // Если пользователь уже в вкладке "Задания" и кликает на "Задания" повторно — возвращаем выбор предмета
+  if (tabName === 'swipes' && state.currentTab === 'swipes' && state.hasActiveSubject) {
+    goBackToMenu();
+    return;
+  }
+
   state.currentTab = tabName;
   haptic.selection();
 
   dom.tabButtons.forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tabName);
   });
+
+  // Если перешли в "Ошибки" или "Профиль" — прячем стартовый экран, чтобы он не загораживал контент
+  if (tabName !== 'swipes') {
+    dom.startScreen.classList.add('hidden');
+  } else if (!state.hasActiveSubject) {
+    // Если вернулись в "Задания", а предмет еще не выбран — показываем стартовый экран
+    dom.startScreen.classList.remove('hidden');
+  }
 
   dom.tabSwipes.classList.toggle('hidden', tabName !== 'swipes');
   dom.tabMistakes.classList.toggle('hidden', tabName !== 'mistakes');
@@ -485,7 +512,6 @@ function updateMistakesBadge() {
 function renderMistakesScreen() {
   dom.mistakesList.innerHTML = '';
 
-  // Фильтруем ошибки только из ТЕКУЩЕГО предмета
   const mistakeCards = state.currentSubjectData.filter(card =>
     state.storage.mistakesArray.includes(card.id)
   );
@@ -493,7 +519,9 @@ function renderMistakesScreen() {
   if (mistakeCards.length === 0) {
     dom.mistakesList.innerHTML = `
       <div class="empty-state">
-        🎉 Нет неотработанных ошибок по этому предмету!<br>Продолжай решать карточки.
+        ${state.hasActiveSubject
+          ? '🎉 Нет неотработанных ошибок по этому предмету!<br>Продолжай решать карточки.'
+          : 'Выбери предмет во вкладке «Задания», чтобы увидеть ошибки по нему.'}
       </div>
     `;
     return;
@@ -502,7 +530,7 @@ function renderMistakesScreen() {
   mistakeCards.forEach(card => {
     const item = document.createElement('div');
     item.className = 'mistake-item';
-    const textTitle = card.fullWord || card.content || card.question || "";
+    const textTitle = card.fullWord || card.content || card.question || '';
 
     item.innerHTML = `
       <div class="mistake-header">
@@ -548,7 +576,7 @@ function renderProfileScreen() {
   dom.profWinrate.textContent = `${winrate}%`;
 }
 
-dom.btnResetProgress.addEventListener('click', () => {
+dom.btnResetProgress?.addEventListener('click', () => {
   haptic.notify('warning');
   state.storage = {
     totalSwipes: 0,
@@ -565,5 +593,3 @@ dom.tabButtons.forEach(btn => {
 });
 
 updateMistakesBadge();
-// renderCurrentCard() больше не вызываем при загрузке файла.
-// Он вызовется сам, когда пользователь выберет предмет.
