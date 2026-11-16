@@ -648,12 +648,43 @@ body, html {
   text-align: center;
 }
 
+/* ВСТАВИТЬ В САМЫЙ КОНЕЦ ФАЙЛА style.css */
+.tab-bar {
+  z-index: 1100; /* TabBar всегда поверх всего */
+}
+
+.footer-controls {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  position: relative;
+  z-index: 1050; /* Кнопки свайпов всегда активны */
+}
+
+.word-title.long-text {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.choice-badge.long-option {
+  width: auto;
+  min-width: 64px;
+  max-width: 130px;
+  height: auto;
+  min-height: 40px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  font-size: 13px;
+  text-align: center;
+}
+
 .start-screen {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100%;
-  height: calc(100% - 64px); /* Оставляем 64px снизу для панели навигации */
+  right: 0;
+  bottom: 64px; /* Оставляем ровно 64px снизу, чтобы TabBar был кликабельным всегда */
   background-color: var(--tg-theme-bg-color, #ffffff);
   color: var(--tg-theme-text-color, #000000);
   display: flex;
