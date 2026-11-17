@@ -141,65 +141,70 @@ dom.subjectButtons.forEach(btn => {
 });
 
 async function startSession(subjectKey) {
-  try {
-    const rawData = await loadSubjectDatabase(subjectKey);
-    if (!rawData || rawData.length === 0) {
-      if (tg?.showAlert) tg.showAlert(`База данных для "${subjectKey}" пуста!`);
-      return;
-    }
-
-    let parsedData = JSON.parse(JSON.stringify(rawData));
-
-    // Авто-конвертер старых форматов
-    parsedData = parsedData.map(card => {
-      if (typeof card.correctAnswer === 'undefined' && typeof card.correct !== 'undefined') {
-        let leftOpt = card.options[0] || "А";
-        let rightOpt = card.options[1] || "Б";
-        let correctDir = "left";
-
-        if (card.correct === 0) { leftOpt = card.options[0]; rightOpt = card.options[1]; correctDir = "left"; }
-        else if (card.correct === 1) { leftOpt = card.options[0]; rightOpt = card.options[1]; correctDir = "right"; }
-        else if (card.correct === 2) { leftOpt = card.options[2]; rightOpt = card.options[1]; correctDir = "left"; }
-        else if (card.correct === 3) { leftOpt = card.options[0]; rightOpt = card.options[3]; correctDir = "right"; }
-
-        return {
-          id: `old_${card.id || Math.random()}`,
-          taskId: "Старый формат",
-          theme: "Файл не обновлен",
-          content: card.question || card.content || "",
-          type: "choice",
-          options: { left: leftOpt, right: rightOpt },
-          correctAnswer: correctDir,
-          explanation: card.explanation || "Ты забыл обновить файл базы данных на GitHub!"
-        };
-      }
-      return card;
-    });
-
-    state.currentSubjectData = parsedData;
-    shuffleArray(state.currentSubjectData);
-    state.seenCardIds.clear();
-    state.hasActiveSubject = true;
-    state.isAnimating = false;
-    state.isExplanationMode = false;
-    state.correctCount = 0;
-    state.wrongCount = 0;
-    state.skippedCount = 0;
-
-    switchTab('swipes');
-    dom.startScreen.classList.add('hidden');
-    dom.finishScreen?.classList.add('hidden');
-
-    if (tg?.BackButton) {
-      tg.BackButton.show();
-      tg.BackButton.onClick(goBackToMenu);
-    }
-
-    loadNextBatch();
-  } catch (err) {
-    console.error('Ошибка загрузки БД:', err);
-    if (tg?.showAlert) tg.showAlert('Ошибка загрузки файла БД из папки db/ !');
+  const rawData = await loadSubjectDatabase(subjectKey);
+  if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
+    alert(`Не удалось загрузить базу: ${subjectKey}. Проверь файл в папке db/`);
+    return;
   }
+
+  // Приводим КАЖДУЮ карточку к единому рабочему формату
+  state.currentSubjectData = rawData.map((item, idx) => {
+    // Если это база с массивом options: ["А", "Б", "В", "Г"] и числом correct: 0..3
+    if (Array.isArray(item.options) && typeof item.correct === 'number') {
+      const correctText = String(item.options[item.correct]);
+      // Берем один неправильный вариант для пары
+      const wrongIdx = item.correct === 0 ? 1 : 0;
+      const wrongText = String(item.options[wrongIdx]);
+
+      // Случайно ставим правильный ответ влево или вправо
+      const putCorrectLeft = idx % 2 === 0;
+
+      return {
+        id: `${subjectKey}_${item.id ?? idx}`,
+        taskId: item.taskId || `Задание ${idx + 1}`,
+        theme: item.theme || 'ЕГЭ',
+        content: item.content || item.question || '',
+        fullWord: item.fullWord || `${ item.question || item.content } — Ответ: ${correctText}`,
+        type: 'choice',
+        options: {
+          left: putCorrectLeft ? correctText : wrongText,
+          right: putCorrectLeft ? wrongText : correctText
+        },
+        correctAnswer: putCorrectLeft ? 'left' : 'right',
+        explanation: item.explanation || ''
+      };
+    }
+
+    // Если карточка уже в новом формате (с options.left / options.right или binary)
+    return {
+      ...item,
+      id: `${subjectKey}_${item.id ?? idx}`,
+      taskId: item.taskId || `Задание ${idx + 1}`,
+      theme: item.theme || 'ЕГЭ',
+      content: item.content || item.question || ''
+    };
+  });
+
+  shuffleArray(state.currentSubjectData);
+  state.seenCardIds.clear();
+  state.hasActiveSubject = true;
+  state.isAnimating = false;
+  state.isExplanationMode = false;
+  state.isDragging = false;
+
+  state.correctCount = 0;
+  state.wrongCount = 0;
+  state.skippedCount = 0;
+
+  dom.startScreen.classList.add('hidden');
+  dom.finishScreen?.classList.add('hidden');
+
+  if (tg?.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(goBackToMenu);
+  }
+
+  loadNextBatch();
 }
 
 function goBackToMenu() {
@@ -300,14 +305,15 @@ function resetBadges() {
 
 // --- 5. ОБРАБОТКА ЖЕСТОВ ---
 function onPointerDown(e) {
-  if (!state.hasActiveSubject || state.isAnimating || state.isExplanationMode) return;
+  if (state.cards.length === 0 || state.isAnimating || state.isExplanationMode) return;
+
   state.isDragging = true;
   state.startX = e.clientX;
   state.startY = e.clientY;
   state.currentX = 0;
   state.crossedThreshold = false;
+
   dom.card.style.transition = 'none';
-  try { dom.card.setPointerCapture(e.pointerId); } catch(err){}
 }
 
 function onPointerMove(e) {
@@ -481,9 +487,9 @@ function goToNextCard(e) {
 
 // --- 7. ПОДПИСКА НА СОБЫТИЯ ---
 dom.card?.addEventListener('pointerdown', onPointerDown);
-dom.card?.addEventListener('pointermove', onPointerMove);
-dom.card?.addEventListener('pointerup', onPointerUp);
-dom.card?.addEventListener('pointercancel', onPointerUp);
+window.addEventListener('pointermove', onPointerMove);
+window.addEventListener('pointerup', onPointerUp);
+window.addEventListener('pointercancel', onPointerUp);
 
 dom.btnNext?.addEventListener('click', goToNextCard);
 dom.cardExplanation?.addEventListener('click', goToNextCard);
